@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Calcetto del Giovedì — Squadre</title>
+<title>Calcetto — Squadre</title>
 <meta name="theme-color" content="#0A1F12" />
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -273,7 +273,7 @@ function clampRating(raw, fallback) {
 
 function buildShareText(result) {
   return (
-    "Calcetto del Giovedì\n" +
+    "Calcetto\n" +
     "Rossa: " +
     result.groupA.map((p) => p.name).join(", ") +
     "\n" +
@@ -445,7 +445,7 @@ function drawFormationCard(canvas, result) {
   ctx.textBaseline = "alphabetic";
   ctx.fillStyle = CARD_C.gold;
   ctx.font = "900 58px 'Barlow Condensed', sans-serif";
-  ctx.fillText("CALCETTO DEL GIOVEDÌ", W / 2, 72);
+  ctx.fillText("CALCETTO", W / 2, 72);
   ctx.fillStyle = "rgba(245,241,232,0.85)";
   ctx.font = "600 34px Barlow, sans-serif";
   ctx.fillText(formatCardDate(new Date()), W / 2, 120);
@@ -712,7 +712,7 @@ function App() {
               className="kicker-dot inline-block w-2 h-2 rounded-full"
               style={{ background: "#F2B705" }}
             ></span>
-            CALCETTO DEL GIOVEDÌ
+            CALCETTO
           </div>
           <h1
             className="font-display font-black uppercase leading-none"
@@ -1152,7 +1152,7 @@ function MatchView({
         try {
           await navigator.share({
             files: [file],
-            title: "Calcetto del Giovedì",
+            title: "Calcetto",
             text,
           });
           return;
