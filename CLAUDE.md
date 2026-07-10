@@ -4,18 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Team-splitter tool for a weekly 5-a-side football ("calcetto") game, Italian-language UI, in two behaviorally identical copies that must stay in sync (same logic/data/UX — only presentation differs):
+Team-splitter tool for a weekly 5-a-side football ("calcetto") game, Italian-language UI.
 
-- `calcetto-squadre.jsx` — plain React component for a host environment that supplies React and a `window.storage` API (async get/set key-value store).
-- `calcetto-squadre.html` — standalone browser version (React + Babel classic-runtime inline via CDN, no build) with the "Stadio di Notte" dark-stadium skin (Barlow Condensed, floodlight vignette, pitch-line watermark). Uses `localStorage` in place of `window.storage`. The JSX lives in a `text/plain` script tag compiled manually with `runtime: "classic"` — Babel's default automatic runtime emits an ES `import` that breaks without a bundler.
+- `calcetto-squadre.html` — standalone browser app (React + Babel classic-runtime inline via CDN, no build) with the "Stadio di Notte" dark-stadium skin (Barlow Condensed, floodlight vignette, pitch-line watermark). Uses `localStorage` for persistence. The JSX lives in a `text/plain` script tag compiled manually with `runtime: "classic"` — Babel's default automatic runtime emits an ES `import` that breaks without a bundler.
+- `manifest.json`, `icon-192.png`, `icon-512.png`, `sw.js` — PWA shell: installable manifest, app icons, and a minimal cache-first service worker that precaches `calcetto-squadre.html` + assets so the app opens offline after one online visit.
+- `netlify.toml` — redirects `/` to `/calcetto-squadre.html` on deploy.
 
 Storage keys: `calcetto-roster` (permanent roster; guests filtered out before writing) and `calcetto-history` (last 30 saved formations).
 
-No build tooling, no package.json, no test runner. To syntax-check after edits: compile the JSX with `@babel/standalone` in node (see design docs in `docs/superpowers/specs/`).
+No build tooling, no package.json, no test runner. To syntax-check after edits: compile the JSX with `@babel/standalone` in node.
 
 ## Architecture
-
-Both files share the same structure, top to bottom:
 
 - **Splitting algorithm** (`allSplits`, `bestBalancedSplits`): brute-force enumerates every two-group split of present players (anchoring `players[0]` in group A to skip mirrored duplicates), scores by absolute rating-sum difference, pools all splits within `minDiff` (widening +1 if fewer than 4 candidates). A secondary goalkeeper criterion then narrows *within* that pool: each player has `gkLevel` (`good`/`average`/`poor` → weight 2/1/0, missing field reads as `average`), and the pool is restricted to minimal `|gkSumA − gkSumB|` with the same ≥4-candidates widening. Rating balance is never violated by the gk pass; all-average rosters behave exactly as the pre-gk algorithm.
 - **`App`**: owns all state (roster, `presentIds`, draw `result`, `history`). Persists roster on change (guests with `isGuest: true` are filtered out, so they vanish on reload); history is written only by the explicit `saveFormation` action (max 30 records). Three tabs: `MatchView` ("Oggi"), `RosterView` ("Rosa"), `HistoryView` ("Storico").
