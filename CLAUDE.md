@@ -7,7 +7,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Team-splitter tool for a weekly 5-a-side football ("calcetto") game, Italian-language UI.
 
 - `calcetto-squadre.html` — standalone browser app (React + Babel classic-runtime inline via CDN, no build) with the "Stadio di Notte" dark-stadium skin (Barlow Condensed, floodlight vignette, pitch-line watermark). Uses `localStorage` for persistence. The JSX lives in a `text/plain` script tag compiled manually with `runtime: "classic"` — Babel's default automatic runtime emits an ES `import` that breaks without a bundler.
-- `manifest.json`, `icon-192.png`, `icon-512.png`, `sw.js` — PWA shell: installable manifest, app icons, and a minimal cache-first service worker that precaches `calcetto-squadre.html` + assets so the app opens offline after one online visit.
 
 Storage keys: `calcetto-roster` (permanent roster; guests filtered out before writing) and `calcetto-history` (last 30 saved formations).
 
