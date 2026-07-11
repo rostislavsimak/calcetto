@@ -2181,9 +2181,11 @@ function VotePage({ encoded }) {
   }
 
   const OPTIONS = [
+    { d: -2, label: "−1" },
     { d: -1, label: "−0,5" },
     { d: 0, label: "=" },
     { d: 1, label: "+0,5" },
+    { d: 2, label: "+1" },
   ];
 
   return shell(
@@ -2197,21 +2199,20 @@ function VotePage({ encoded }) {
           return (
             <div
               key={p.i}
-              className="flex items-center justify-between px-3 py-2.5 rounded-xl"
+              className="px-3 py-2.5 rounded-xl"
               style={{
                 background: "rgba(255,255,255,0.05)",
                 border: "1px solid rgba(255,255,255,0.08)",
               }}
             >
-              <span className="text-sm font-semibold">{p.n}</span>
+              <div className="text-sm font-semibold mb-2">{p.n}</div>
               <div className="flex gap-1">
                 {OPTIONS.map((o) => (
                   <button
                     key={o.d}
                     onClick={() => setDelta(p.i, o.d)}
-                    className="pressable font-display rounded-lg text-xs font-bold"
+                    className="pressable font-display flex-1 rounded-lg text-xs font-bold"
                     style={{
-                      minWidth: "44px",
                       minHeight: "36px",
                       background:
                         current === o.d ? "#1B4332" : "rgba(255,255,255,0.06)",
