@@ -257,6 +257,88 @@ const STORAGE_KEY = "calcetto-roster";
 const HISTORY_KEY = "calcetto-history";
 const HISTORY_MAX = 30;
 
+// ---------- post-match vote link (base64url + compact vote code) ----------
+// Vote payload lives entirely in the URL (?vote=...), no backend: the
+// organizer shares a link, each player votes on their own phone, then
+// sends the resulting code back over WhatsApp for the organizer to paste
+// into "Conta voti". Code format: CLC1|<matchId>|<voterId>|<id>:<d>,...
+// where d is -1/0/1 for -0.5/invariato/+0.5.
+function toB64Url(str) {
+  return btoa(unescape(encodeURIComponent(str)))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+function fromB64Url(str) {
+  let s = str.replace(/-/g, "+").replace(/_/g, "/");
+  while (s.length % 4) s += "=";
+  return decodeURIComponent(escape(atob(s)));
+}
+
+function buildVoteLink(matchId, date, players) {
+  const payload = {
+    m: matchId,
+    d: date,
+    p: players.map((p) => ({ i: p.id, n: p.name })),
+  };
+  const encoded = toB64Url(JSON.stringify(payload));
+  const base = location.href.split("?")[0].split("#")[0];
+  return base + "?vote=" + encoded;
+}
+
+function buildVoteCode(matchId, voterId, deltas, players) {
+  const pairs = players
+    .filter((p) => p.i !== voterId)
+    .map((p) => p.i + ":" + (deltas[p.i] || 0))
+    .join(",");
+  return "CLC1|" + matchId + "|" + voterId + "|" + pairs;
+}
+
+// Extracts every vote code for `matchId` found anywhere in pasted text
+// (WhatsApp forwards add names/timestamps around it, so this scans loosely
+// rather than expecting the whole paste to be just the code).
+function parseVoteCodes(text, matchId) {
+  const re = /CLC1\|([a-z0-9]+)\|([a-z0-9]+)\|([a-z0-9:,\-]+)/gi;
+  const byVoter = new Map(); // last vote per voterId wins
+  let m;
+  while ((m = re.exec(text))) {
+    const [, mId, voterId, pairsRaw] = m;
+    if (mId !== matchId) continue;
+    const deltas = {};
+    pairsRaw.split(",").forEach((pair) => {
+      const [id, d] = pair.split(":");
+      if (id) deltas[id] = Number(d) || 0;
+    });
+    byVoter.set(voterId, deltas);
+  }
+  return [...byVoter.entries()].map(([voterId, deltas]) => ({
+    voterId,
+    deltas,
+  }));
+}
+
+function tallyVotes(votes, players) {
+  const sum = {};
+  const count = {};
+  players.forEach((p) => {
+    sum[p.id] = 0;
+    count[p.id] = 0;
+  });
+  votes.forEach((v) => {
+    Object.entries(v.deltas).forEach(([id, d]) => {
+      if (!(id in sum)) return;
+      sum[id] += d;
+      count[id] += 1;
+    });
+  });
+  return players.map((p) => {
+    const n = count[p.id];
+    const avgDelta = n > 0 ? sum[p.id] / n : 0;
+    return { ...p, votes: n, avgDelta };
+  });
+}
+
 const GK_OPTIONS = [
   { value: "good", label: "Sì" },
   { value: "average", label: "Normale" },
@@ -665,6 +747,7 @@ function App() {
   function saveFormation() {
     if (!result) return;
     const record = {
+      matchId: uid(),
       date: new Date().toISOString(),
       groupA: result.groupA.map((p) => ({ id: p.id, name: p.name })),
       groupB: result.groupB.map((p) => ({ id: p.id, name: p.name })),
@@ -789,7 +872,11 @@ function App() {
         )}
 
         {view === "history" && (
-          <HistoryView history={history} onDelete={deleteHistoryRecord} />
+          <HistoryView
+            history={history}
+            onDelete={deleteHistoryRecord}
+            players={players}
+          />
         )}
       </div>
     </div>
@@ -1637,8 +1724,10 @@ function TeamCard({
 
 // ---------- history tab ----------
 
-function HistoryView({ history, onDelete }) {
+function HistoryView({ history, onDelete, players }) {
   const [confirmIdx, setConfirmIdx] = useState(null);
+  const [linkIdx, setLinkIdx] = useState(null);
+  const [tallyIdx, setTallyIdx] = useState(null);
 
   if (history.length === 0) {
     return (
@@ -1719,13 +1808,450 @@ function HistoryView({ history, onDelete }) {
             <span style={{ color: "#3D8BD4", fontWeight: 700 }}>Blu:</span>{" "}
             {h.groupB.map((p) => p.name).join(", ")}
           </div>
+
+          {h.matchId && (
+            <div className="grid grid-cols-2 gap-2 mt-3">
+              <button
+                onClick={() => setLinkIdx(i)}
+                className="pressable font-display py-2 rounded-lg font-bold uppercase tracking-wider text-xs"
+                style={{
+                  background: "rgba(255,255,255,0.07)",
+                  color: "#F5F1E8",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                }}
+              >
+                Genera link voto
+              </button>
+              <button
+                onClick={() => setTallyIdx(i)}
+                className="pressable font-display py-2 rounded-lg font-bold uppercase tracking-wider text-xs"
+                style={{
+                  background: "transparent",
+                  border: "1px solid #F2B705",
+                  color: "#F2B705",
+                }}
+              >
+                Conta voti
+              </button>
+            </div>
+          )}
         </div>
       ))}
+
+      {linkIdx !== null && (
+        <VoteLinkModal
+          record={history[linkIdx]}
+          onClose={() => setLinkIdx(null)}
+        />
+      )}
+      {tallyIdx !== null && (
+        <TallyModal
+          record={history[tallyIdx]}
+          players={players}
+          onClose={() => setTallyIdx(null)}
+        />
+      )}
     </div>
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+function ModalShell({ onClose, children }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: "rgba(0,0,0,0.72)" }}
+      onClick={onClose}
+    >
+      <div
+        className="rounded-2xl p-4 w-full max-w-sm max-h-[85vh] overflow-y-auto"
+        style={{
+          background: "#0A1F12",
+          border: "1px solid rgba(255,255,255,0.15)",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function VoteLinkModal({ record, onClose }) {
+  const [copied, setCopied] = useState(false);
+  const matchPlayers = [...record.groupA, ...record.groupB];
+  const link = buildVoteLink(record.matchId, record.date, matchPlayers);
+
+  async function copyLink() {
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e) {}
+  }
+
+  async function share() {
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: "Calcetto — vota i compagni",
+          text: "Vota i compagni della partita:",
+          url: link,
+        });
+        return;
+      }
+    } catch (e) {
+      if (e.name === "AbortError") return;
+    }
+    copyLink();
+  }
+
+  return (
+    <ModalShell onClose={onClose}>
+      <div className="font-display text-sm font-bold uppercase tracking-widest mb-3 opacity-70">
+        Link voto compagni
+      </div>
+      <div className="text-xs opacity-60 mb-3">
+        Manda questo link ai giocatori della partita. Ognuno vota dal proprio
+        telefono e ti rimanda il codice generato (es. su WhatsApp).
+      </div>
+      <input
+        readOnly
+        value={link}
+        onFocus={(e) => e.target.select()}
+        className="w-full mb-3 px-3 py-2.5 rounded-lg text-xs"
+        style={{
+          background: "rgba(5,19,11,0.6)",
+          border: "1px solid rgba(255,255,255,0.15)",
+          color: "#F5F1E8",
+        }}
+      />
+      <div className="flex gap-2">
+        <button
+          onClick={share}
+          className="pressable font-display flex-1 py-2.5 rounded-lg font-bold uppercase tracking-wider text-sm"
+          style={{ background: "#F2B705", color: "#0A1F12" }}
+        >
+          Condividi
+        </button>
+        <button
+          onClick={copyLink}
+          className="pressable font-display flex-1 py-2.5 rounded-lg font-bold uppercase tracking-wider text-sm"
+          style={{
+            background: "rgba(255,255,255,0.08)",
+            color: "#F5F1E8",
+            border: "1px solid rgba(255,255,255,0.1)",
+          }}
+        >
+          {copied ? "Copiato ✓" : "Copia link"}
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
+
+function TallyModal({ record, players, onClose }) {
+  const [pasted, setPasted] = useState("");
+  const [rows, setRows] = useState(null);
+
+  const matchPlayers = [...record.groupA, ...record.groupB];
+
+  function compute() {
+    const votes = parseVoteCodes(pasted, record.matchId);
+    const tallied = tallyVotes(votes, matchPlayers);
+    const withRatings = tallied.map((t) => {
+      const current = players.find((p) => p.id === t.id);
+      const currentRating = current ? current.rating : null;
+      const suggested =
+        currentRating != null
+          ? clampRating(currentRating + t.avgDelta * 0.5, currentRating)
+          : null;
+      return { ...t, currentRating, suggested };
+    });
+    setRows({ withRatings, voterCount: votes.length });
+  }
+
+  return (
+    <ModalShell onClose={onClose}>
+      <div className="font-display text-sm font-bold uppercase tracking-widest mb-3 opacity-70">
+        Conta voti
+      </div>
+      <div className="text-xs opacity-60 mb-3">
+        Incolla qui i messaggi ricevuti (anche tutti insieme, va bene se
+        contengono altro testo attorno).
+      </div>
+      <textarea
+        value={pasted}
+        onChange={(e) => setPasted(e.target.value)}
+        placeholder="Incolla i voti ricevuti…"
+        rows={5}
+        className="w-full mb-3 px-3 py-2.5 rounded-lg text-xs"
+        style={{
+          background: "rgba(5,19,11,0.6)",
+          border: "1px solid rgba(255,255,255,0.15)",
+          color: "#F5F1E8",
+        }}
+      />
+      <button
+        onClick={compute}
+        className="pressable font-display w-full py-2.5 rounded-lg font-bold uppercase tracking-wider text-sm mb-3"
+        style={{ background: "#F2B705", color: "#0A1F12" }}
+      >
+        Calcola
+      </button>
+
+      {rows && (
+        <div>
+          <div className="text-xs opacity-50 mb-2">
+            {rows.voterCount} vot{rows.voterCount === 1 ? "o" : "i"} letti.
+          </div>
+          <div className="space-y-1.5 mb-2">
+            {rows.withRatings.map((r) => (
+              <div
+                key={r.id}
+                className="flex items-center justify-between text-xs px-2.5 py-2 rounded-lg"
+                style={{ background: "rgba(255,255,255,0.05)" }}
+              >
+                <span className="font-semibold">{r.name}</span>
+                <span className="tabular opacity-60">
+                  {r.votes} vot{r.votes === 1 ? "o" : "i"}
+                </span>
+                <span className="tabular">
+                  {r.currentRating != null ? r.currentRating : "–"}
+                  {" → "}
+                  <span style={{ color: "#F2B705", fontWeight: 700 }}>
+                    {r.suggested != null ? r.suggested : "–"}
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="text-xs opacity-50">
+            Aggiorna i punteggi a mano nella Rosa.
+          </div>
+        </div>
+      )}
+    </ModalShell>
+  );
+}
+
+// ---------- post-match vote page (opened via ?vote=…, no app shell state) ----------
+
+function VotePage({ encoded }) {
+  const [voterId, setVoterId] = useState(null);
+  const [deltas, setDeltas] = useState({});
+  const [sent, setSent] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  let payload = null;
+  try {
+    payload = JSON.parse(fromB64Url(encoded));
+  } catch (e) {}
+
+  const shell = (children) => (
+    <div
+      className="min-h-screen w-full relative"
+      style={{
+        background: "linear-gradient(180deg, #0A1F12 0%, #05130B 100%)",
+        color: "#F5F1E8",
+      }}
+    >
+      <div className="pitch-lines" aria-hidden="true"></div>
+      <div className="floodlight" aria-hidden="true"></div>
+      <div className="noise" aria-hidden="true"></div>
+      <div className="max-w-md mx-auto px-4 pb-16 pt-7 relative">
+        <header className="mb-6">
+          <div
+            className="flex items-center gap-2 text-xs font-semibold tracking-[0.3em] mb-1.5"
+            style={{ color: "#F2B705" }}
+          >
+            <span
+              className="kicker-dot inline-block w-2 h-2 rounded-full"
+              style={{ background: "#F2B705" }}
+            ></span>
+            CALCETTO
+          </div>
+          <h1
+            className="font-display font-black uppercase leading-none"
+            style={{ fontSize: "2.6rem", letterSpacing: "0.01em" }}
+          >
+            Vota
+          </h1>
+        </header>
+        {children}
+      </div>
+    </div>
+  );
+
+  if (!payload || !payload.p || !payload.p.length) {
+    return shell(
+      <div className="text-sm opacity-60 py-10 text-center">
+        Link non valido o incompleto.
+      </div>
+    );
+  }
+
+  if (!voterId) {
+    return shell(
+      <div>
+        <div className="font-display text-sm font-bold uppercase tracking-widest mb-3 opacity-70">
+          Chi sei?
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          {payload.p.map((p) => (
+            <button
+              key={p.i}
+              onClick={() => setVoterId(p.i)}
+              className="pressable flex items-center justify-center px-3 rounded-xl text-sm font-semibold"
+              style={{
+                minHeight: "48px",
+                background: "rgba(255,255,255,0.04)",
+                border: "1px solid rgba(255,255,255,0.08)",
+              }}
+            >
+              {p.n}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const voter = payload.p.find((p) => p.i === voterId);
+  const others = payload.p.filter((p) => p.i !== voterId);
+
+  if (sent) {
+    const code = buildVoteCode(payload.m, voterId, deltas, payload.p);
+    const message =
+      "Voto di " + (voter ? voter.n : "?") + " – Calcetto\n" + code;
+
+    async function copyCode() {
+      try {
+        await navigator.clipboard.writeText(message);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      } catch (e) {}
+    }
+
+    return shell(
+      <div className="text-center py-6">
+        <div className="text-lg font-bold mb-2">Grazie, {voter.n} ✓</div>
+        <div className="text-xs opacity-60 mb-4">
+          Se la condivisione non è partita da sola, copia e manda tu il
+          messaggio a chi ha organizzato.
+        </div>
+        <button
+          onClick={copyCode}
+          className="pressable font-display w-full py-2.5 rounded-lg font-bold uppercase tracking-wider text-sm"
+          style={{
+            background: "rgba(255,255,255,0.08)",
+            color: "#F5F1E8",
+            border: "1px solid rgba(255,255,255,0.1)",
+          }}
+        >
+          {copied ? "Copiato ✓" : "Copia messaggio"}
+        </button>
+      </div>
+    );
+  }
+
+  function setDelta(id, d) {
+    setDeltas((prev) => ({ ...prev, [id]: d }));
+  }
+
+  async function submit() {
+    const code = buildVoteCode(payload.m, voterId, deltas, payload.p);
+    const message =
+      "Voto di " + (voter ? voter.n : "?") + " – Calcetto\n" + code;
+    try {
+      if (navigator.share) {
+        await navigator.share({ text: message });
+        setSent(true);
+        return;
+      }
+    } catch (e) {
+      if (e.name === "AbortError") return;
+    }
+    try {
+      window.open(
+        "https://wa.me/?text=" + encodeURIComponent(message),
+        "_blank"
+      );
+    } catch (e) {}
+    setSent(true);
+  }
+
+  const OPTIONS = [
+    { d: -1, label: "−0,5" },
+    { d: 0, label: "=" },
+    { d: 1, label: "+0,5" },
+  ];
+
+  return shell(
+    <div>
+      <div className="font-display text-sm font-bold uppercase tracking-widest mb-3 opacity-70">
+        Come hanno giocato i compagni? ({voter.n})
+      </div>
+      <div className="space-y-2 mb-4">
+        {others.map((p) => {
+          const current = deltas[p.i] || 0;
+          return (
+            <div
+              key={p.i}
+              className="flex items-center justify-between px-3 py-2.5 rounded-xl"
+              style={{
+                background: "rgba(255,255,255,0.05)",
+                border: "1px solid rgba(255,255,255,0.08)",
+              }}
+            >
+              <span className="text-sm font-semibold">{p.n}</span>
+              <div className="flex gap-1">
+                {OPTIONS.map((o) => (
+                  <button
+                    key={o.d}
+                    onClick={() => setDelta(p.i, o.d)}
+                    className="pressable font-display rounded-lg text-xs font-bold"
+                    style={{
+                      minWidth: "44px",
+                      minHeight: "36px",
+                      background:
+                        current === o.d ? "#1B4332" : "rgba(255,255,255,0.06)",
+                      color: current === o.d ? "#F5F1E8" : "rgba(245,241,232,0.6)",
+                      border:
+                        current === o.d
+                          ? "1px solid #F2B705"
+                          : "1px solid rgba(255,255,255,0.08)",
+                    }}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <button
+        onClick={submit}
+        className="pressable font-display w-full py-4 rounded-xl font-black uppercase tracking-wider text-lg"
+        style={{
+          background: "#F2B705",
+          color: "#0A1F12",
+          boxShadow: "0 4px 24px rgba(242,183,5,0.35)",
+        }}
+      >
+        Invia voto
+      </button>
+    </div>
+  );
+}
+
+function Root() {
+  const voteParam = new URLSearchParams(location.search).get("vote");
+  if (voteParam) return <VotePage encoded={voteParam} />;
+  return <App />;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<Root />);
 </script>
 <script>
   const src = document.getElementById("app-src").textContent;
